@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CPU Scheduler Simulator</title>
+<style>
+body { font-family: Arial, sans-serif; margin: 20px; background: #f4f4f4; }
+h1 { text-align: center; }
+.container { max-width: 900px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px #ccc; }
+input, select, button { padding: 8px; margin: 5px 0; width: 100%; }
+table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+th { background: #007BFF; color: white; }
+.gantt-bar { display: inline-block; height: 30px; margin: 2px; text-align: center; color: white; line-height: 30px; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>CPU Scheduler Simulator</h1>
+
+<h3>Process Input</h3>
+<div id="process-inputs"></div>
+<button onclick="addProcess()">Add Process</button>
+
+<h3>Algorithm</h3>
+<select id="algorithm">
+<option value="fcfs">First Come First Serve (FCFS)</option>
+<option value="sjf">Shortest Job First (SJF)</option>
+<option value="srtf">Shortest Remaining Time First (SRTF)</option>
+<option value="priority">Priority Scheduling</option>
+<option value="rr">Round Robin</option>
+</select>
+
+<div id="quantumDiv" style="display:none;">
+<input type="number" id="quantum" placeholder="Enter Time Quantum">
+</div>
+
+<button onclick="runScheduler()">Run Scheduler</button>
+
+<h3>Gantt Chart</h3>
+<div id="ganttChart"></div>
+
+<h3>Process Metrics</h3>
+<table id="metricsTable">
+<tr>
+<th>Process</th>
+<th>Arrival Time</th>
+<th>Burst Time</th>
+<th>Priority</th>
+<th>Completion Time</th>
+<th>Turnaround Time</th>
+<th>Waiting Time</th>
+<th>Response Time</th>
+</tr>
+</table>
+</div>
+
+<script>
+let processes = [];
+
+function addProcess() {
+    const index = processes.length + 1;
+    const div = document.createElement('div');
+    div.innerHTML = `
+    <h4>Process P${index}</h4>
+    <input type="number" placeholder="Arrival Time" id="at${index}" required>
+    <input type="number" placeholder="Burst Time" id="bt${index}" required>
+    <input type="number" placeholder="Priority (optional)" id="pr${index}">
+    `;
+    document.getElementById('process-inputs').appendChild(div);
+    processes.push({id: 'P'+index});
+}
+
+// Show quantum input for Round Robin
+document.getElementById('algorithm').addEventListener('change', function(){
+    document.getElementById('quantumDiv').style.display = this.value === 'rr' ? 'block' : 'none';
+});
+
+function runScheduler() {
+    // Read inputs
+    processes.forEach((p,i)=>{
+        p.at = parseInt(document.getElementById('at'+(i+1)).value);
+        p.bt = parseInt(document.getElementById('bt'+(i+1)).value);
+        p.pr = document.getElementById('pr'+(i+1)).value ? parseInt(document.getElementById('pr'+(i+1)).value) : 0;
+        p.remain = p.bt; // remaining time for SRTF/RR
+        p.start = null; // first start time for response
+    });
+
+    const algo = document.getElementById('algorithm').value;
+    const quantum = parseInt(document.getElementById('quantum').value);
+    let gantt = [];
+    let time = 0;
+    let completed = 0;
+    let n = processes.length;
+
+    // Reset metrics
+    processes.forEach(p=>{ p.ct=0; p.tt=0; p.wt=0; p.rt=0; });
+
+    if(algo==='fcfs'){
+        processes.sort((a,b)=>a.at - b.at);
+        processes.forEach(p=>{
+            time = Math.max(time, p.at);
+            p.start = time;
+            p.ct = time + p.bt;
+            time += p.bt;
+            p.tt = p.ct - p.at;
+            p.wt = p.tt - p.bt;
+            p.rt = p.start - p.at;
+            gantt.push({id: p.id, start: p.start, end: p.ct});
+        });
+    }
+    else if(algo==='sjf'){
+        let done = Array(n).fill(false);
+        while(completed<n){
+            let idx = -1, minBT = Infinity;
+            for(let i=0;i<n;i++){
+                if(!done[i] && processes[i].at<=time && processes[i].bt<minBT){
+                    minBT = processes[i].bt;
+                    idx = i;
+                }
+            }
+            if(idx===-1){ time++; continue; }
+            let p = processes[idx];
+            p.start = time;
+            time += p.bt;
+            p.ct = time;
+            p.tt = p.ct - p.at;
+            p.wt = p.tt - p.bt;
+            p.rt = p.start - p.at;
+            gantt.push({id: p.id, start: p.start, end: p.ct});
+            done[idx]=true;
+            completed++;
+        }
+    }
+    else if(algo==='srtf'){
+        let remain = processes.map(p=>p.bt);
+        let done = 0;
+        let visited = Array(n).fill(false);
+        while(done<n){
+            let idx=-1, minR=Infinity;
+            for(let i=0;i<n;i++){
+                if(processes[i].at<=time && remain[i]>0 && remain[i]<minR){
+                    minR=remain[i]; idx=i;
+                }
+            }
+            if(idx===-1){ time++; continue; }
+            let p=processes[idx];
+            if(p.start===null) p.start=time;
+            gantt.push({id: p.id, start: time, end: time+1});
+            remain[idx]--;
+            time++;
+            if(remain[idx]===0){
+                p.ct = time;
+                p.tt = p.ct - p.at;
+                p.wt = p.tt - p.bt;
+                p.rt = p.start - p.at;
+                done++;
+            }
+        }
+        // merge gantt bars of same process consecutively
+        gantt = mergeGantt(gantt);
+    }
+    else if(algo==='priority'){
+        let done = Array(n).fill(false);
+        while(completed<n){
+            let idx=-1, maxPr=-Infinity;
+            for(let i=0;i<n;i++){
+                if(!done[i] && processes[i].at<=time && processes[i].pr>=maxPr){
+                    maxPr=processes[i].pr; idx=i;
+                }
+            }
+            if(idx===-1){ time++; continue; }
+            let p = processes[idx];
+            p.start = time;
+            time += p.bt;
+            p.ct = time;
+            p.tt = p.ct - p.at;
+            p.wt = p.tt - p.bt;
+            p.rt = p.start - p.at;
+            gantt.push({id: p.id, start: p.start, end: p.ct});
+            done[idx]=true;
+            completed++;
+        }
+    }
+    else if(algo==='rr'){
+        if(!quantum || quantum<=0){ alert("Enter valid time quantum"); return; }
+        let queue = [], visited = Array(n).fill(false);
+        while(completed<n){
+            for(let i=0;i<n;i++) if(processes[i].at<=time && !visited[i]){ queue.push(i); visited[i]=true; }
+            if(queue.length===0){ time++; continue; }
+            let idx = queue.shift();
+            let p = processes[idx];
+            if(p.start===null) p.start = time;
+            let t = Math.min(quantum, p.remain);
+            gantt.push({id: p.id, start: time, end: time+t});
+            time += t;
+            p.remain -= t;
+            for(let i=0;i<n;i++) if(processes[i].at<=time && !visited[i]){ queue.push(i); visited[i]=true; }
+            if(p.remain>0) queue.push(idx);
+            else{
+                p.ct = time;
+                p.tt = p.ct - p.at;
+                p.wt = p.tt - p.bt;
+                p.rt = p.start - p.at;
+                completed++;
+            }
+        }
+    }
+
+    displayGantt(gantt);
+    displayTable();
+}
+
+function mergeGantt(gantt){
+    let merged = [];
+    gantt.forEach(bar=>{
+        if(merged.length && merged[merged.length-1].id===bar.id && merged[merged.length-1].end===bar.start){
+            merged[merged.length-1].end = bar.end;
+        } else merged.push({...bar});
+    });
+    return merged;
+}
+
+function displayGantt(gantt){
+    const container = document.getElementById('ganttChart');
+    container.innerHTML='';
+    const colors = ["#007BFF","#28A745","#DC3545","#FFC107","#6C757D","#17A2B8"];
+    gantt.forEach((bar,i)=>{
+        let div = document.createElement('div');
+        div.className='gantt-bar';
+        div.style.width = (bar.end-bar.start)*30 + 'px';
+        div.style.background = colors[i % colors.length];
+        div.innerText=bar.id;
+        container.appendChild(div);
+    });
+}
+
+function displayTable(){
+    const table = document.getElementById('metricsTable');
+    table.innerHTML='<tr><th>Process</th><th>Arrival Time</th><th>Burst Time</th><th>Priority</th><th>Completion Time</th><th>Turnaround Time</th><th>Waiting Time</th><th>Response Time</th></tr>';
+    processes.forEach(p=>{
+        let row = `<tr>
+        <td>${p.id}</td>
+        <td>${p.at}</td>
+        <td>${p.bt}</td>
+        <td>${p.pr}</td>
+        <td>${p.ct}</td>
+        <td>${p.tt}</td>
+        <td>${p.wt}</td>
+        <td>${p.rt}</td>
+        </tr>`;
+        table.innerHTML += row;
+    });
+}
+</script>
+</body>
+</html>
